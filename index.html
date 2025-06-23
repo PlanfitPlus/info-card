@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>العد التنازلي</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8; /* Soft, light background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            flex-direction: column;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 30px;
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+        .image-container {
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+            width: 100%;
+            max-width: 400px; /* Max size for image */
+            height: auto;
+        }
+        .image-container img {
+            width: 100%;
+            height: auto;
+            display: block;
+            object-fit: cover;
+        }
+        .countdown-display {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #2c3e50; /* Dark text color */
+            background-color: #ecf0f1; /* Light background for countdown */
+            padding: 15px 30px;
+            border-radius: 10px;
+            box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        .destruction-message {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #e74c3c; /* Red alert color */
+            text-align: center;
+            margin-top: 30px;
+            opacity: 0; /* Hidden by default */
+            transition: opacity 1s ease-in-out; /* Smooth fade-in */
+        }
+        .destruction-message.visible {
+            opacity: 1; /* Make visible */
+        }
+        .hidden {
+            display: none !important;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 640px) {
+            .countdown-display {
+                font-size: 1.8rem;
+            }
+            .destruction-message {
+                font-size: 1.4rem;
+            }
+            .container {
+                padding: 20px;
+                gap: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="site-content" class="container">
+        <div class="image-container">
+            <img src="https://i.pinimg.com/736x/54/fb/60/54fb6089779ee00ab309a1c0b40430ad.jpg" alt="صورة توضيحية">
+        </div>
+        <div id="countdown" class="countdown-display">
+            جارٍ التحميل...
+        </div>
+    </div>
+    <div id="destruction-message" class="destruction-message">
+        لقد تم تدمير الموقع!
+    </div>
+
+    <script>
+        const countdownElement = document.getElementById('countdown');
+        const siteContent = document.getElementById('site-content');
+        const destructionMessage = document.getElementById('destruction-message');
+        const countdownEndTimeKey = 'countdownEndTime'; // المفتاح لتخزين وقت الانتهاء في localStorage
+
+        let countdownEndTime; // سيتم تخزين الطابع الزمني لوقت انتهاء العد التنازلي
+
+        // التحقق مما إذا كان هناك وقت انتهاء مخزن بالفعل في localStorage
+        const storedEndTime = localStorage.getItem(countdownEndTimeKey);
+
+        if (storedEndTime) {
+            // إذا كان هناك وقت انتهاء، قم بتحويله إلى رقم
+            countdownEndTime = parseInt(storedEndTime, 10);
+
+            // إذا كان الوقت المخزن في الماضي (أي أن العد التنازلي قد انتهى بالفعل)، أعد تعيينه لدورة 24 ساعة جديدة
+            // هذا يمنع ظهور رسالة "الموقع مدمر" فورًا إذا عاد المستخدم بعد فترة طويلة من 24 ساعة الأولية.
+            if (countdownEndTime < Date.now()) {
+                countdownEndTime = Date.now() + (24 * 60 * 60 * 1000); // 24 ساعة من الآن بالمللي ثانية
+                localStorage.setItem(countdownEndTimeKey, countdownEndTime);
+            }
+        } else {
+            // إذا لم يكن هناك وقت انتهاء مخزن، قم بتعيينه لـ 24 ساعة من الآن
+            countdownEndTime = Date.now() + (24 * 60 * 60 * 1000); // 24 ساعة من الآن بالمللي ثانية
+            localStorage.setItem(countdownEndTimeKey, countdownEndTime);
+        }
+
+        function updateCountdown() {
+            const currentTime = Date.now();
+            // حساب الوقت المتبقي بالمللي ثانية
+            const remainingTime = countdownEndTime - currentTime;
+
+            // تحويل المللي ثانية المتبقية إلى إجمالي الثواني، مع التأكد من أنها ليست أقل من صفر
+            let totalSeconds = Math.max(0, Math.floor(remainingTime / 1000));
+
+            // التحقق مما إذا كان الوقت قد انتهى
+            if (totalSeconds <= 0) {
+                countdownElement.textContent = "انتهى الوقت!";
+                siteContent.classList.add('hidden'); // إخفاء محتوى الموقع بالكامل (بما في ذلك الصورة)
+                destructionMessage.classList.add('visible'); // إظهار رسالة التدمير
+                clearInterval(countdownInterval); // إيقاف المؤقت
+                localStorage.removeItem(countdownEndTimeKey); // اختياري: مسح وقت الانتهاء المخزن
+                return;
+            }
+
+            // حساب الساعات والدقائق والثواني
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+
+            // تنسيق الأرقام بإضافة صفر بادئة إذا كانت أقل من 10
+            const displayHours = String(hours).padStart(2, '0');
+            const displayMinutes = String(minutes).padStart(2, '0');
+            const displaySeconds = String(seconds).padStart(2, '0');
+
+            // تحديث نص العداد
+            countdownElement.textContent = `${displayHours}:${displayMinutes}:${displaySeconds}`;
+        }
+
+        // بدء المؤقت وتحديثه كل ثانية
+        const countdownInterval = setInterval(updateCountdown, 1000);
+
+        // تحديث أولي عند تحميل الصفحة لضمان عرض العداد فورًا
+        updateCountdown();
+    </script>
+</body>
+</html>
