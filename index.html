@@ -5,11 +5,144 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>العد التنازلي</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // العناصر الأساسية من DOM
+        const countdownElement = document.getElementById('countdown');
+        const siteContent = document.getElementById('site-content');
+        const destructionMessage = document.getElementById('destruction-message');
+
+        // متغيرات Firebase و Firestore
+        let app;
+        let db;
+        let auth;
+        let userId;
+
+        // وقت انتهاء العد التنازلي (سيتم جلبه من Firestore)
+        let countdownEndTime;
+        // علامة لتحديد ما إذا كان الموقع قد تم "تدميره" (أي انتهى العد التنازلي)
+        let isSiteDestroyed = false;
+
+        // معرف التطبيق وتكوين Firebase يتم توفيرهما من بيئة Canvas
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+
+        // مرجع مستند Firestore لعداد الوقت الموحد
+        // سنستخدم مستندًا واحدًا لتخزين حالة العداد للجميع
+        const countdownDocRef = (firestoreInstance) => doc(firestoreInstance, `/artifacts/${appId}/public/data/countdownTimers/globalCountdown`);
+
+        // دالة لتحديث عرض العد التنازلي
+        function updateCountdownDisplay() {
+            const currentTime = Date.now();
+            const remainingTime = countdownEndTime - currentTime;
+
+            // إجمالي الثواني المتبقية، لا يمكن أن تكون أقل من صفر
+            let totalSeconds = Math.max(0, Math.floor(remainingTime / 1000));
+
+            // إذا كان الوقت قد انتهى
+            if (totalSeconds <= 0) {
+                // إذا لم يتم تدمير الموقع بعد في قاعدة البيانات، قم بتحديث الحالة
+                if (!isSiteDestroyed) {
+                    setDoc(countdownDocRef(db), { endTime: Date.now(), isDestroyed: true }, { merge: true })
+                        .catch(error => console.error("Error setting destruction state in Firestore:", error));
+                    isSiteDestroyed = true; // تحديث الحالة المحلية لمنع التحديثات المتكررة
+                }
+
+                countdownElement.textContent = "انتهى الوقت!";
+                siteContent.classList.add('hidden'); // إخفاء محتوى الموقع بالكامل
+                destructionMessage.classList.add('visible'); // إظهار رسالة التدمير
+                clearInterval(countdownInterval); // إيقاف المؤقت
+                return;
+            }
+
+            // حساب الساعات والدقائق والثواني
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+
+            // تنسيق الأرقام بإضافة صفر بادئة إذا كانت أقل من 10
+            const displayHours = String(hours).padStart(2, '0');
+            const displayMinutes = String(minutes).padStart(2, '0');
+            const displaySeconds = String(seconds).padStart(2, '0');
+
+            // تحديث نص العداد
+            countdownElement.textContent = `${displayHours}:${displayMinutes}:${displaySeconds}`;
+        }
+
+        // متغير لتخزين معرف الفاصل الزمني (setInterval)
+        let countdownInterval;
+
+        // دالة تهيئة Firebase والعد التنازلي
+        async function initializeFirebaseAndCountdown() {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                // تسجيل الدخول كمستخدم مجهول أو باستخدام الرمز المميز المقدم
+                if (typeof __initial_auth_token !== 'undefined') {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                userId = auth.currentUser?.uid; // الحصول على معرف المستخدم بعد تسجيل الدخول
+
+                // الاستماع للتغييرات في مستند العد التنازلي في Firestore في الوقت الفعلي
+                onSnapshot(countdownDocRef(db), async (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        countdownEndTime = data.endTime;
+                        isSiteDestroyed = data.isDestroyed || false; // جلب حالة التدمير
+
+                        // إذا كان الموقع قد تم تدميره بالفعل (العداد وصل لصفر في مرة سابقة)
+                        if (isSiteDestroyed) {
+                            countdownElement.textContent = "انتهى الوقت!";
+                            siteContent.classList.add('hidden');
+                            destructionMessage.classList.add('visible');
+                            clearInterval(countdownInterval); // تأكد من إيقاف أي مؤقت نشط
+                            return; // لا داعي لمواصلة تحديث العداد
+                        }
+
+                        // إذا كان وقت الانتهاء في الماضي ولكن لم يتم وضع علامة "تدمير"
+                        // هذا يعني أن العد التنازلي قد انتهى ولكن الحالة لم تُسجل بعد أو يحتاج لبداية جديدة
+                        if (countdownEndTime < Date.now()) {
+                            // إعادة تعيين لـ 24 ساعة جديدة وتحديث في Firestore
+                            const newEndTime = Date.now() + (24 * 60 * 60 * 1000);
+                            await setDoc(countdownDocRef(db), { endTime: newEndTime, isDestroyed: false });
+                            countdownEndTime = newEndTime; // تحديث الوقت المحلي أيضًا
+                        }
+
+                    } else {
+                        // إذا لم يكن المستند موجودًا (أول مرة يتم فيها فتح الموقع)
+                        // قم بإنشاء وقت انتهاء جديد لـ 24 ساعة وتخزينه
+                        countdownEndTime = Date.now() + (24 * 60 * 60 * 1000);
+                        await setDoc(countdownDocRef(db), { endTime: countdownEndTime, isDestroyed: false });
+                    }
+
+                    // ابدأ أو أعد تشغيل الفاصل الزمني للعداد بعد تحميل وقت الانتهاء
+                    if (countdownInterval) clearInterval(countdownInterval); // مسح أي فاصل زمني موجود
+                    countdownInterval = setInterval(updateCountdownDisplay, 1000);
+                    updateCountdownDisplay(); // تحديث أولي فورًا
+                });
+
+            } catch (error) {
+                console.error("خطأ في تهيئة Firebase أو جلب العداد:", error);
+                countdownElement.textContent = "خطأ في تحميل العداد. يرجى المحاولة مرة أخرى.";
+            }
+        }
+
+        // بدء تهيئة Firebase والعداد بمجرد تحميل النافذة
+        window.onload = initializeFirebaseAndCountdown;
+    </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #f0f4f8; /* Soft, light background */
+            background-color: #f0f4f8; /* خلفية فاتحة وناعمة */
             display: flex;
             justify-content: center;
             align-items: center;
@@ -37,7 +170,7 @@
             overflow: hidden;
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
             width: 100%;
-            max-width: 400px; /* Max size for image */
+            max-width: 400px; /* حجم أقصى للصورة */
             height: auto;
         }
         .image-container img {
@@ -49,8 +182,8 @@
         .countdown-display {
             font-size: 2.5rem;
             font-weight: 700;
-            color: #2c3e50; /* Dark text color */
-            background-color: #ecf0f1; /* Light background for countdown */
+            color: #2c3e50; /* لون نص داكن */
+            background-color: #ecf0f1; /* خلفية خفيفة للعداد */
             padding: 15px 30px;
             border-radius: 10px;
             box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.1);
@@ -58,20 +191,20 @@
         .destruction-message {
             font-size: 1.8rem;
             font-weight: 700;
-            color: #e74c3c; /* Red alert color */
+            color: #e74c3c; /* لون أحمر للتنبيه */
             text-align: center;
             margin-top: 30px;
-            opacity: 0; /* Hidden by default */
-            transition: opacity 1s ease-in-out; /* Smooth fade-in */
+            opacity: 0; /* مخفي افتراضيًا */
+            transition: opacity 1s ease-in-out; /* انتقال سلس للظهور */
         }
         .destruction-message.visible {
-            opacity: 1; /* Make visible */
+            opacity: 1; /* جعله مرئيًا */
         }
         .hidden {
             display: none !important;
         }
 
-        /* Responsive adjustments */
+        /* تعديلات الاستجابة */
         @media (max-width: 640px) {
             .countdown-display {
                 font-size: 1.8rem;
@@ -98,71 +231,5 @@
     <div id="destruction-message" class="destruction-message">
         لقد تم تدمير الموقع!
     </div>
-
-    <script>
-        const countdownElement = document.getElementById('countdown');
-        const siteContent = document.getElementById('site-content');
-        const destructionMessage = document.getElementById('destruction-message');
-        const countdownEndTimeKey = 'countdownEndTime'; // المفتاح لتخزين وقت الانتهاء في localStorage
-
-        let countdownEndTime; // سيتم تخزين الطابع الزمني لوقت انتهاء العد التنازلي
-
-        // التحقق مما إذا كان هناك وقت انتهاء مخزن بالفعل في localStorage
-        const storedEndTime = localStorage.getItem(countdownEndTimeKey);
-
-        if (storedEndTime) {
-            // إذا كان هناك وقت انتهاء، قم بتحويله إلى رقم
-            countdownEndTime = parseInt(storedEndTime, 10);
-
-            // إذا كان الوقت المخزن في الماضي (أي أن العد التنازلي قد انتهى بالفعل)، أعد تعيينه لدورة 24 ساعة جديدة
-            // هذا يمنع ظهور رسالة "الموقع مدمر" فورًا إذا عاد المستخدم بعد فترة طويلة من 24 ساعة الأولية.
-            if (countdownEndTime < Date.now()) {
-                countdownEndTime = Date.now() + (24 * 60 * 60 * 1000); // 24 ساعة من الآن بالمللي ثانية
-                localStorage.setItem(countdownEndTimeKey, countdownEndTime);
-            }
-        } else {
-            // إذا لم يكن هناك وقت انتهاء مخزن، قم بتعيينه لـ 24 ساعة من الآن
-            countdownEndTime = Date.now() + (24 * 60 * 60 * 1000); // 24 ساعة من الآن بالمللي ثانية
-            localStorage.setItem(countdownEndTimeKey, countdownEndTime);
-        }
-
-        function updateCountdown() {
-            const currentTime = Date.now();
-            // حساب الوقت المتبقي بالمللي ثانية
-            const remainingTime = countdownEndTime - currentTime;
-
-            // تحويل المللي ثانية المتبقية إلى إجمالي الثواني، مع التأكد من أنها ليست أقل من صفر
-            let totalSeconds = Math.max(0, Math.floor(remainingTime / 1000));
-
-            // التحقق مما إذا كان الوقت قد انتهى
-            if (totalSeconds <= 0) {
-                countdownElement.textContent = "انتهى الوقت!";
-                siteContent.classList.add('hidden'); // إخفاء محتوى الموقع بالكامل (بما في ذلك الصورة)
-                destructionMessage.classList.add('visible'); // إظهار رسالة التدمير
-                clearInterval(countdownInterval); // إيقاف المؤقت
-                localStorage.removeItem(countdownEndTimeKey); // اختياري: مسح وقت الانتهاء المخزن
-                return;
-            }
-
-            // حساب الساعات والدقائق والثواني
-            const hours = Math.floor(totalSeconds / 3600);
-            const minutes = Math.floor((totalSeconds % 3600) / 60);
-            const seconds = totalSeconds % 60;
-
-            // تنسيق الأرقام بإضافة صفر بادئة إذا كانت أقل من 10
-            const displayHours = String(hours).padStart(2, '0');
-            const displayMinutes = String(minutes).padStart(2, '0');
-            const displaySeconds = String(seconds).padStart(2, '0');
-
-            // تحديث نص العداد
-            countdownElement.textContent = `${displayHours}:${displayMinutes}:${displaySeconds}`;
-        }
-
-        // بدء المؤقت وتحديثه كل ثانية
-        const countdownInterval = setInterval(updateCountdown, 1000);
-
-        // تحديث أولي عند تحميل الصفحة لضمان عرض العداد فورًا
-        updateCountdown();
-    </script>
 </body>
 </html>
