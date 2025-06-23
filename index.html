@@ -28,12 +28,29 @@
         let isSiteDestroyed = false;
 
         // معرف التطبيق وتكوين Firebase يتم توفيرهما من بيئة Canvas
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        // عند النشر على GitHub Pages أو أي استضافة أخرى، يجب استبدال هذه المتغيرات بتكوين Firebase الخاص بك.
+        // اذهب إلى إعدادات مشروعك في Firebase Console -> Project settings -> General
+        // وقم بنسخ كائن تكوين Firebase الخاص بالويب والصقه هنا.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // يبقى هذا للاستخدام في Canvas
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            // ** استبدل هذا الكائن بتكوين Firebase الخاص بك **
+            // مثال:
+            // apiKey: "YOUR_API_KEY",
+            // authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            // projectId: "YOUR_PROJECT_ID",
+            // storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            // messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            // appId: "YOUR_APP_ID"
+            // ** لا تنسَ إزالة التعليقات بعد لصق التكوين الخاص بك **
+        };
 
         // مرجع مستند Firestore لعداد الوقت الموحد
         // سنستخدم مستندًا واحدًا لتخزين حالة العداد للجميع
-        const countdownDocRef = (firestoreInstance) => doc(firestoreInstance, `/artifacts/${appId}/public/data/countdownTimers/globalCountdown`);
+        // ملاحظة: `appId` في المسار هو معرف التطبيق الذي تستخدمه في Canvas، وقد تحتاج إلى تعديله
+        // ليناسب طريقة تنظيم بياناتك في مشروع Firebase الخاص بك إذا كنت لا تستخدم بنية `artifacts/{appId}`.
+        // بالنسبة لهذا المثال، سنفترض أن `projectId` من `firebaseConfig` يمكن أن يحل محل `appId` إذا لم يكن `__app_id` متاحًا.
+        const effectiveAppId = firebaseConfig.projectId || appId;
+        const countdownDocRef = (firestoreInstance) => doc(firestoreInstance, `/artifacts/${effectiveAppId}/public/data/countdownTimers/globalCountdown`);
 
         // دالة لتحديث عرض العد التنازلي
         function updateCountdownDisplay() {
@@ -79,6 +96,13 @@
         // دالة تهيئة Firebase والعد التنازلي
         async function initializeFirebaseAndCountdown() {
             try {
+                // قم بالتهيئة باستخدام تكوين Firebase المناسب
+                // إذا كان firebaseConfig فارغًا (مثل في GitHub Pages إذا لم يتم ملؤه)، فستفشل التهيئة.
+                if (Object.keys(firebaseConfig).length === 0) {
+                    console.error("Firebase configuration is missing. Please provide your Firebase project config.");
+                    countdownElement.textContent = "خطأ: تكوين Firebase مفقود.";
+                    return;
+                }
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
@@ -87,6 +111,8 @@
                 if (typeof __initial_auth_token !== 'undefined') {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
+                    // في بيئة الإنتاج (مثل GitHub Pages)، قد لا يكون __initial_auth_token متاحًا.
+                    // في هذه الحالة، سنستخدم تسجيل الدخول المجهول.
                     await signInAnonymously(auth);
                 }
                 userId = auth.currentUser?.uid; // الحصول على معرف المستخدم بعد تسجيل الدخول
@@ -127,6 +153,10 @@
                     if (countdownInterval) clearInterval(countdownInterval); // مسح أي فاصل زمني موجود
                     countdownInterval = setInterval(updateCountdownDisplay, 1000);
                     updateCountdownDisplay(); // تحديث أولي فورًا
+                }, (error) => {
+                    // معالجة الأخطاء في onSnapshot
+                    console.error("Error listening to Firestore changes:", error);
+                    countdownElement.textContent = "خطأ في الاتصال بالعداد. يرجى التحقق من اتصالك.";
                 });
 
             } catch (error) {
