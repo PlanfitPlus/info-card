@@ -3,171 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>العد التنازلي</title>
+    <title>موقع الصورة فقط</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Firebase SDKs -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // العناصر الأساسية من DOM
-        const countdownElement = document.getElementById('countdown');
-        const siteContent = document.getElementById('site-content');
-        const destructionMessage = document.getElementById('destruction-message');
-
-        // متغيرات Firebase و Firestore
-        let app;
-        let db;
-        let auth;
-        let userId;
-
-        // وقت انتهاء العد التنازلي (سيتم جلبه من Firestore)
-        let countdownEndTime;
-        // علامة لتحديد ما إذا كان الموقع قد تم "تدميره" (أي انتهى العد التنازلي)
-        let isSiteDestroyed = false;
-
-        // معرف التطبيق وتكوين Firebase يتم توفيرهما من بيئة Canvas
-        // عند النشر على GitHub Pages أو أي استضافة أخرى، يجب استبدال هذه المتغيرات بتكوين Firebase الخاص بك.
-        // اذهب إلى إعدادات مشروعك في Firebase Console -> Project settings -> General
-        // وقم بنسخ كائن تكوين Firebase الخاص بالويب والصقه هنا.
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // يبقى هذا للاستخدام في Canvas
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            // ** استبدل هذا الكائن بتكوين Firebase الخاص بك **
-            // مثال:
-            // apiKey: "YOUR_API_KEY",
-            // authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-            // projectId: "YOUR_PROJECT_ID",
-            // storageBucket: "YOUR_PROJECT_ID.appspot.com",
-            // messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-            // appId: "YOUR_APP_ID"
-            // ** لا تنسَ إزالة التعليقات بعد لصق التكوين الخاص بك **
-        };
-
-        // مرجع مستند Firestore لعداد الوقت الموحد
-        // سنستخدم مستندًا واحدًا لتخزين حالة العداد للجميع
-        // ملاحظة: `appId` في المسار هو معرف التطبيق الذي تستخدمه في Canvas، وقد تحتاج إلى تعديله
-        // ليناسب طريقة تنظيم بياناتك في مشروع Firebase الخاص بك إذا كنت لا تستخدم بنية `artifacts/{appId}`.
-        // بالنسبة لهذا المثال، سنفترض أن `projectId` من `firebaseConfig` يمكن أن يحل محل `appId` إذا لم يكن `__app_id` متاحًا.
-        const effectiveAppId = firebaseConfig.projectId || appId;
-        const countdownDocRef = (firestoreInstance) => doc(firestoreInstance, `/artifacts/${effectiveAppId}/public/data/countdownTimers/globalCountdown`);
-
-        // دالة لتحديث عرض العد التنازلي
-        function updateCountdownDisplay() {
-            const currentTime = Date.now();
-            const remainingTime = countdownEndTime - currentTime;
-
-            // إجمالي الثواني المتبقية، لا يمكن أن تكون أقل من صفر
-            let totalSeconds = Math.max(0, Math.floor(remainingTime / 1000));
-
-            // إذا كان الوقت قد انتهى
-            if (totalSeconds <= 0) {
-                // إذا لم يتم تدمير الموقع بعد في قاعدة البيانات، قم بتحديث الحالة
-                if (!isSiteDestroyed) {
-                    setDoc(countdownDocRef(db), { endTime: Date.now(), isDestroyed: true }, { merge: true })
-                        .catch(error => console.error("Error setting destruction state in Firestore:", error));
-                    isSiteDestroyed = true; // تحديث الحالة المحلية لمنع التحديثات المتكررة
-                }
-
-                countdownElement.textContent = "انتهى الوقت!";
-                siteContent.classList.add('hidden'); // إخفاء محتوى الموقع بالكامل
-                destructionMessage.classList.add('visible'); // إظهار رسالة التدمير
-                clearInterval(countdownInterval); // إيقاف المؤقت
-                return;
-            }
-
-            // حساب الساعات والدقائق والثواني
-            const hours = Math.floor(totalSeconds / 3600);
-            const minutes = Math.floor((totalSeconds % 3600) / 60);
-            const seconds = totalSeconds % 60;
-
-            // تنسيق الأرقام بإضافة صفر بادئة إذا كانت أقل من 10
-            const displayHours = String(hours).padStart(2, '0');
-            const displayMinutes = String(minutes).padStart(2, '0');
-            const displaySeconds = String(seconds).padStart(2, '0');
-
-            // تحديث نص العداد
-            countdownElement.textContent = `${displayHours}:${displayMinutes}:${displaySeconds}`;
-        }
-
-        // متغير لتخزين معرف الفاصل الزمني (setInterval)
-        let countdownInterval;
-
-        // دالة تهيئة Firebase والعد التنازلي
-        async function initializeFirebaseAndCountdown() {
-            try {
-                // قم بالتهيئة باستخدام تكوين Firebase المناسب
-                // إذا كان firebaseConfig فارغًا (مثل في GitHub Pages إذا لم يتم ملؤه)، فستفشل التهيئة.
-                if (Object.keys(firebaseConfig).length === 0) {
-                    console.error("Firebase configuration is missing. Please provide your Firebase project config.");
-                    countdownElement.textContent = "خطأ: تكوين Firebase مفقود.";
-                    return;
-                }
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-
-                // تسجيل الدخول كمستخدم مجهول أو باستخدام الرمز المميز المقدم
-                if (typeof __initial_auth_token !== 'undefined') {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    // في بيئة الإنتاج (مثل GitHub Pages)، قد لا يكون __initial_auth_token متاحًا.
-                    // في هذه الحالة، سنستخدم تسجيل الدخول المجهول.
-                    await signInAnonymously(auth);
-                }
-                userId = auth.currentUser?.uid; // الحصول على معرف المستخدم بعد تسجيل الدخول
-
-                // الاستماع للتغييرات في مستند العد التنازلي في Firestore في الوقت الفعلي
-                onSnapshot(countdownDocRef(db), async (docSnap) => {
-                    if (docSnap.exists()) {
-                        const data = docSnap.data();
-                        countdownEndTime = data.endTime;
-                        isSiteDestroyed = data.isDestroyed || false; // جلب حالة التدمير
-
-                        // إذا كان الموقع قد تم تدميره بالفعل (العداد وصل لصفر في مرة سابقة)
-                        if (isSiteDestroyed) {
-                            countdownElement.textContent = "انتهى الوقت!";
-                            siteContent.classList.add('hidden');
-                            destructionMessage.classList.add('visible');
-                            clearInterval(countdownInterval); // تأكد من إيقاف أي مؤقت نشط
-                            return; // لا داعي لمواصلة تحديث العداد
-                        }
-
-                        // إذا كان وقت الانتهاء في الماضي ولكن لم يتم وضع علامة "تدمير"
-                        // هذا يعني أن العد التنازلي قد انتهى ولكن الحالة لم تُسجل بعد أو يحتاج لبداية جديدة
-                        if (countdownEndTime < Date.now()) {
-                            // إعادة تعيين لـ 24 ساعة جديدة وتحديث في Firestore
-                            const newEndTime = Date.now() + (24 * 60 * 60 * 1000);
-                            await setDoc(countdownDocRef(db), { endTime: newEndTime, isDestroyed: false });
-                            countdownEndTime = newEndTime; // تحديث الوقت المحلي أيضًا
-                        }
-
-                    } else {
-                        // إذا لم يكن المستند موجودًا (أول مرة يتم فيها فتح الموقع)
-                        // قم بإنشاء وقت انتهاء جديد لـ 24 ساعة وتخزينه
-                        countdownEndTime = Date.now() + (24 * 60 * 60 * 1000);
-                        await setDoc(countdownDocRef(db), { endTime: countdownEndTime, isDestroyed: false });
-                    }
-
-                    // ابدأ أو أعد تشغيل الفاصل الزمني للعداد بعد تحميل وقت الانتهاء
-                    if (countdownInterval) clearInterval(countdownInterval); // مسح أي فاصل زمني موجود
-                    countdownInterval = setInterval(updateCountdownDisplay, 1000);
-                    updateCountdownDisplay(); // تحديث أولي فورًا
-                }, (error) => {
-                    // معالجة الأخطاء في onSnapshot
-                    console.error("Error listening to Firestore changes:", error);
-                    countdownElement.textContent = "خطأ في الاتصال بالعداد. يرجى التحقق من اتصالك.";
-                });
-
-            } catch (error) {
-                console.error("خطأ في تهيئة Firebase أو جلب العداد:", error);
-                countdownElement.textContent = "خطأ في تحميل العداد. يرجى المحاولة مرة أخرى.";
-            }
-        }
-
-        // بدء تهيئة Firebase والعداد بمجرد تحميل النافذة
-        window.onload = initializeFirebaseAndCountdown;
-    </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
         body {
@@ -190,7 +27,7 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 30px;
+            gap: 30px; /* يمكن تقليل هذا إذا كان هناك عنصر واحد فقط */
             max-width: 600px;
             width: 100%;
             text-align: center;
@@ -208,15 +45,6 @@
             height: auto;
             display: block;
             object-fit: cover;
-        }
-        .countdown-display {
-            font-size: 2.5rem;
-            font-weight: 700;
-            color: #2c3e50; /* لون نص داكن */
-            background-color: #ecf0f1; /* خلفية خفيفة للعداد */
-            padding: 15px 30px;
-            border-radius: 10px;
-            box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.1);
         }
         .destruction-message {
             font-size: 1.8rem;
@@ -236,12 +64,6 @@
 
         /* تعديلات الاستجابة */
         @media (max-width: 640px) {
-            .countdown-display {
-                font-size: 1.8rem;
-            }
-            .destruction-message {
-                font-size: 1.4rem;
-            }
             .container {
                 padding: 20px;
                 gap: 20px;
@@ -254,9 +76,7 @@
         <div class="image-container">
             <img src="https://i.pinimg.com/736x/54/fb/60/54fb6089779ee00ab309a1c0b40430ad.jpg" alt="صورة توضيحية">
         </div>
-        <div id="countdown" class="countdown-display">
-            جارٍ التحميل...
-        </div>
+        <!-- العداد التنازلي تم حذفه -->
     </div>
     <div id="destruction-message" class="destruction-message">
         لقد تم تدمير الموقع!
